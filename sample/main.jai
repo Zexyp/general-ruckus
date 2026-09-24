@@ -1,60 +1,45 @@
 #import "Basic";
+#import "String";
+#import "jai-vulkan";
+
+DEBUG :: true;
+
+#load "../src/utils.jai";
 
 main :: () {
-    log_debug("hello");
-    log_info("hello");
-    log_warning("hello");
-    log_error("hello");
-    
-    // Create window
-    window = create_window(xx width, xx height, "Hello Vulkan");
-  
-    vContext: VulkanContext;
-    // Init Vulkan.
-    if !init_vulkan(*vContext) {
+    instance: VkInstance;
+
+    if !init_vulkan(*instance) {
         return;
     }
-    defer deinit_vulkan(*vContext);
-
-    // Init Surface.
-    if !init_surface() {
-        print("Window surface creation failed.\n");
-        return;
-    }
-    defer deinit_surface();
-
-    // Init Device.
-    if !init_device() {
-        print("Device initialization failed.\n");
-        return;
-    }
-    defer deinit_device();    
-
-    // Init Swapchain.
-    if !init_swapchain() {
-        print("Swapchain initialization failed.\n");
-        return;
-    }
-    defer deinit_swapchain();
-
-
-    // Init Render.
-    init_render();
-    defer deinit_render();
-
-    quit := false;
-    while !quit {
-        update_window_events();
-
-        for events_this_frame {
-            if it.type == .QUIT then quit = true;
-        }
-
-        draw_frame();
-    }
+    defer deinit_vulkan(instance);
+    defer instance = null;
 }
 
-init_vulkan :: (vContext: *VulkanContext) -> bool {
+debug_callback :: (flags: VkDebugReportFlagsEXT, objType: VkDebugReportObjectTypeEXT, obj: u64, location: u64, code: s32, layerPrefix: *u8, msg: *u8, userData: *void) -> VkBool32 #c_call {
+    push_context {
+        print("VULKAN VALIDATION: %\n", to_string(msg));
+    }
+    
+    return VK_FALSE;
+}
+
+debug_callback_khronos :: (messageSeverity: VkDebugUtilsMessageSeverityFlagBitsEXT,
+                           messageType: VkDebugUtilsMessageTypeFlagBitsEXT,
+                           pCallbackData: *VkDebugUtilsMessengerCallbackDataEXT,
+                           pUserData: *void) -> VkBool32 #c_call {
+    push_context {
+        print("VULKAN DEBUG: %\n", to_string(pCallbackData.*.pMessage));
+    }
+    
+    return VK_FALSE;
+}
+
+debug_callback_handle : VkDebugReportCallbackEXT;
+
+vkDestroyDebugReportCallbackEXT : PFN_vkDestroyDebugReportCallbackEXT;
+
+init_vulkan :: (instance: *VkInstance) -> bool {
     result : VkResult = .ERROR_INITIALIZATION_FAILED;
     
     // not needed
@@ -65,7 +50,7 @@ init_vulkan :: (vContext: *VulkanContext) -> bool {
     //app_info.pEngineName        = "No Engine";
     //app_info.engineVersion      = VK_MAKE_VERSION(1, 0, 0);
 
-    print_available_extensions(vContext.*);
+    print_available_extensions();
 
     instance_create_info: VkInstanceCreateInfo;
     //create_info.pApplicationInfo        = *app_info;
@@ -82,11 +67,21 @@ init_vulkan :: (vContext: *VulkanContext) -> bool {
             array_add(*extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME.data);
             array_add(*extensions, VK_EXT_DEBUG_REPORT_EXTENSION_NAME.data);
         }
+    } else #if OS == .LINUX {
+        extensions: [..] *u8;
+
+        array_add(*extensions, VK_KHR_SURFACE_EXTENSION_NAME.data);
+        array_add(*extensions, VK_KHR_XLIB_SURFACE_EXTENSION_NAME.data);
+
+        #if DEBUG {
+            array_add(*extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME.data);
+            array_add(*extensions, VK_EXT_DEBUG_REPORT_EXTENSION_NAME.data);
+        }
     } else {
         extensions: [0] *u8;
-        // @ToDo: Non-Windows version
         #assert(false);
     }
+
 
     instance_create_info.enabledExtensionCount = cast(u32)extensions.count;
     instance_create_info.ppEnabledExtensionNames = extensions.data;
@@ -108,7 +103,7 @@ init_vulkan :: (vContext: *VulkanContext) -> bool {
         
         debug_create_info.pNext = *debug_info;
 
-        result = vkCreateInstance(*debug_create_info, null, *state.instance);
+        result = vkCreateInstance(*debug_create_info, null, instance);
 
         instance_layers_count: u32;
         vkEnumerateInstanceLayerProperties(*instance_layers_count, null);
@@ -136,24 +131,9 @@ init_vulkan :: (vContext: *VulkanContext) -> bool {
             return false;
         }
 
-        vkCreateDebugReportCallbackEXT  : PFN_vkCreateDebugReportCallbackEXT = xx vkGetInstanceProcAddr(state.instance, "vkCreateDebugReportCallbackEXT");
-        vkDestroyDebugReportCallbackEXT = xx vkGetInstanceProcAddr(state.instance, "vkDestroyDebugReportCallbackEXT");
-        vkDebugReportMessageEXT         : PFN_vkDebugReportMessageEXT = xx vkGetInstanceProcAddr(state.instance, "vkDebugReportMessageEXT");
-
-        if vkCreateDebugReportCallbackEXT {
-            debug_callback_create_info: VkDebugReportCallbackCreateInfoEXT;
-            
-            debug_callback_create_info.flags |= .INFORMATION_BIT_EXT;
-            debug_callback_create_info.flags |= .WARNING_BIT_EXT;
-            debug_callback_create_info.flags |= .PERFORMANCE_WARNING_BIT_EXT;
-            debug_callback_create_info.flags |= .ERROR_BIT_EXT;
-            debug_callback_create_info.flags |= .DEBUG_BIT_EXT;
-            debug_callback_create_info.pfnCallback = debug_callback;
-
-            vkCreateDebugReportCallbackEXT(state.instance, *debug_callback_create_info, null, *state.debug_callback_handle);
-        }
+        
     } else {
-        result = vkCreateInstance(*instance_create_info, null, *state.instance);
+        result = vkCreateInstance(*instance_create_info, null, instance);
     }
 
     if result != .SUCCESS {
@@ -164,101 +144,19 @@ init_vulkan :: (vContext: *VulkanContext) -> bool {
     return true;
 }
 
-deinit_vulkan :: (vContext: *VulkanContext) {
+deinit_vulkan :: (instance: VkInstance) {
     #if DEBUG {
-        if vkDestroyDebugReportCallbackEXT && state.debug_callback_handle {
-            vkDestroyDebugReportCallbackEXT(state.instance, state.debug_callback_handle, null);
+        if vkDestroyDebugReportCallbackEXT && debug_callback_handle {
+            vkDestroyDebugReportCallbackEXT(instance, debug_callback_handle, null);
         }
     }
 
     // destroy
-    vkDestroyInstance(state.instance, null);
-    state.instance = null;
+    vkDestroyInstance(instance, null);
+    instance = null;
 }
 
-init_device :: (vContext: *VulkanContext) -> bool {
-    // Picking physical device
-    //
-
-    physical_devices_count: u32;
-    vkEnumeratePhysicalDevices(state.instance, *physical_devices_count, null);
-    physical_devices_array := NewArray(physical_devices_count, VkPhysicalDevice);
-    defer free(physical_devices_array.data);
-    vkEnumeratePhysicalDevices(state.instance, *physical_devices_count, physical_devices_array.data);
-
-    log_debug("Available physical devices:");
-    for device: physical_devices_array {
-
-        device_properties: VkPhysicalDeviceProperties;
-        vkGetPhysicalDeviceProperties(device, *device_properties);
-        log_debug("    %", to_string(device_properties.deviceName));
-
-        queue_family_count: u32 = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(device, *queue_family_count, null);
-        queue_family_array := NewArray(queue_family_count, VkQueueFamilyProperties);
-        defer free(queue_family_array.data);
-        vkGetPhysicalDeviceQueueFamilyProperties(device, *queue_family_count, queue_family_array.data);
-
-        for queue_family: queue_family_array {
-            supports_present := VK_FALSE;
-            vkGetPhysicalDeviceSurfaceSupportKHR(device, state.queue_family_index, state.surface, *supports_present);
-
-            log_debug("        queue family properites: %", queue_family);
-
-            if supports_present && (queue_family.queueFlags & .GRAPHICS_BIT) {
-                log_debug("            supports present and graphics");
-
-                // we will use this
-                state.queue_family_index = cast(u32)it_index;
-                state.physical_device = device;
-
-                //break;
-            }
-        }
-
-        if (state.physical_device) {
-            //break;
-        }
-    }
-
-    if (!state.physical_device) {
-        log_error("No physical device");
-        return false;
-    }
-
-    // Logical device
-    //
-    queue_create_info: VkDeviceQueueCreateInfo;
-    queue_create_info.queueFamilyIndex = state.queue_family_index;
-    queue_create_info.queueCount = 1;
-    queue_create_info.pQueuePriorities = float.[1.0].data; // lul, this tells that we are very important
-
-    device_create_info: VkDeviceCreateInfo;
-    device_create_info.queueCreateInfoCount    = 1;
-    device_create_info.pQueueCreateInfos       = *queue_create_info;
-    
-    // kámen úrazu
-    //exexe: [1] *u8;
-    //exexe[0] = VK_KHR_SWAPCHAIN_EXTENSION_NAME.data;
-//
-    //device_create_info.enabledLayerCount       = 0;
-    //device_create_info.ppEnabledLayerNames     = null;
-    //device_create_info.enabledExtensionCount   = exexe.count;
-    //device_create_info.ppEnabledExtensionNames = exexe.data;
-    //device_create_info.pEnabledFeatures = null;
-    
-    result := vkCreateDevice(state.physical_device, *device_create_info, null, *state.device);
-
-    vkGetDeviceQueue(state.device, state.queue_family_index, queueIndex=0, *state.queue);
-
-    return result == .SUCCESS;
-}
-
-deinit_device :: (vContext: *VulkanContext) {
-    vkDestroyDevice(state.device, null);
-}
-
-print_available_extensions :: (vContext: VulkanContext) {
+print_available_extensions :: () {
     extension_count: u32;
     vkEnumerateInstanceExtensionProperties(null, *extension_count, null);
     

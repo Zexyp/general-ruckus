@@ -1,8 +1,12 @@
-#import "Vulkan";
+#import "Basic";
+#import "Print_Color";
 
-VK_CALL :: (result: VkResult) -> VkResult #expand {
-    assert(result == .SUCCESS);
-    return result;
+log_time :: () {
+    calendar := to_calendar(current_time_consensus());
+    print("[%:%:%]",
+        formatInt(calendar.hour, minimum_digits=2),
+        formatInt(calendar.minute, minimum_digits=2),
+        formatInt(calendar.second, minimum_digits=2));
 }
 
 log_debug :: (format_string: string, args: .. Any) {
