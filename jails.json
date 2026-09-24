@@ -1,0 +1,11 @@
+{
+    "local_modules": [
+        "modules"
+    ],
+    "roots": [
+        "sample/main.jai"
+    ],
+    "build_root": "build.jai",
+    "intermediate_path": ".build",
+    "use_symbols_from_local_modules": true
+}
